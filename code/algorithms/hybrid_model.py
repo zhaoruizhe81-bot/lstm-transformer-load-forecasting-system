@@ -1,50 +1,73 @@
 # LSTM-Transformer混合模型实现
+import copy
 import torch
 import torch.nn as nn
-import numpy as np
-import math
 
 class HybridModel(nn.Module):
     """LSTM-Transformer混合模型"""
-    
-    def __init__(self, input_size=1, lstm_hidden=64, transformer_layers=2, nhead=4, dropout=0.15, output_size=1):
+
+    def __init__(
+        self,
+        input_size=1,
+        lstm_hidden=64,
+        transformer_layers=2,
+        nhead=4,
+        dropout=0.15,
+        output_size=1,
+        lstm_layers=1,
+        feedforward_multiplier=4
+    ):
         super(HybridModel, self).__init__()
-        
-        # LSTM部分
+
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=lstm_hidden,
-            num_layers=1,
-            batch_first=True
+            num_layers=lstm_layers,
+            dropout=dropout if lstm_layers > 1 else 0,
+            batch_first=True,
         )
-        
-        # Transformer部分
+
         self.d_model = lstm_hidden
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=self.d_model,
             nhead=nhead,
-            dim_feedforward=self.d_model * 4,
+            dim_feedforward=self.d_model * feedforward_multiplier,
             dropout=dropout,
+            activation='gelu',
             batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layers, transformer_layers)
-        
-        # 输出层
-        self.fc = nn.Linear(lstm_hidden, output_size)
+
+        self.lstm_norm = nn.LayerNorm(lstm_hidden)
+        self.transformer_norm = nn.LayerNorm(lstm_hidden)
         self.dropout = nn.Dropout(dropout)
-    
+        self.regressor = nn.Sequential(
+            nn.Linear(lstm_hidden * 2 + input_size, lstm_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(lstm_hidden, max(16, lstm_hidden // 2)),
+            nn.GELU(),
+            nn.Linear(max(16, lstm_hidden // 2), output_size)
+        )
+
     def forward(self, x):
         # x shape: (batch, seq_len, input_size)
-        # LSTM提取时序特征
         lstm_out, _ = self.lstm(x)
-        
-        # Transformer增强特征
-        transformer_out = self.transformer(lstm_out)
-        
-        # 取最后一个时间步
-        out = self.dropout(transformer_out[:, -1, :])
-        out = self.fc(out)
-        return out
+        lstm_features = self.lstm_norm(lstm_out)
+
+        transformer_out = self.transformer(lstm_features)
+        transformer_features = self.transformer_norm(transformer_out)
+
+        # 同时保留LSTM短期记忆、Transformer上下文增强特征和最近观测值。
+        features = torch.cat(
+            [
+                lstm_features[:, -1, :],
+                transformer_features[:, -1, :],
+                x[:, -1, :]
+            ],
+            dim=1
+        )
+        return self.regressor(self.dropout(features))
 
 class HybridTrainer:
     """混合模型训练器"""
@@ -52,8 +75,15 @@ class HybridTrainer:
     def __init__(self, model, learning_rate=0.0005, device='cpu'):
         self.model = model.to(device)
         self.device = device
-        self.criterion = nn.MSELoss()
-        self.optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        self.criterion = nn.SmoothL1Loss(beta=0.02)
+        self.optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',
+            factor=0.5,
+            patience=8,
+            min_lr=1e-6
+        )
         self.train_losses = []
         self.valid_losses = []
     
@@ -72,6 +102,7 @@ class HybridTrainer:
             
             self.optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             self.optimizer.step()
             
             epoch_loss += loss.item()
@@ -100,16 +131,30 @@ class HybridTrainer:
     
     def train(self, train_loader, valid_loader, epochs=120):
         """完整训练流程"""
+        best_loss = float('inf')
+        best_state = None
+        best_epoch = 0
+
         for epoch in range(epochs):
             train_loss = self.train_epoch(train_loader)
             valid_loss = self.validate(valid_loader)
+            self.scheduler.step(valid_loss)
             
             self.train_losses.append(train_loss)
             self.valid_losses.append(valid_loss)
+
+            if valid_loss < best_loss:
+                best_loss = valid_loss
+                best_epoch = epoch + 1
+                best_state = copy.deepcopy(self.model.state_dict())
             
             if (epoch + 1) % 10 == 0:
                 print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {train_loss:.6f}, Valid Loss: {valid_loss:.6f}')
-        
+
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
+            print(f'Best Hybrid checkpoint: epoch {best_epoch}, Valid Loss: {best_loss:.6f}')
+
         return self.train_losses, self.valid_losses
     
     def predict(self, X):
@@ -140,4 +185,3 @@ class HybridTrainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.train_losses = checkpoint.get('train_losses', [])
         self.valid_losses = checkpoint.get('valid_losses', [])
-

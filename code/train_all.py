@@ -78,9 +78,12 @@ MODEL_CONFIGS = {
 }
 
 HYBRID_CANDIDATES = [
-    {'lstm_hidden': 64, 'transformer_layers': 2, 'nhead': 4, 'dropout': 0.15, 'learning_rate': 0.0005, 'epochs': 45},
-    {'lstm_hidden': 64, 'transformer_layers': 3, 'nhead': 4, 'dropout': 0.10, 'learning_rate': 0.0005, 'epochs': 45},
-    {'lstm_hidden': 128, 'transformer_layers': 2, 'nhead': 4, 'dropout': 0.10, 'learning_rate': 0.0003, 'epochs': 45},
+    {'lstm_hidden': 128, 'lstm_layers': 1, 'transformer_layers': 2, 'nhead': 4, 'dropout': 0.08, 'learning_rate': 0.0003, 'epochs': 80},
+    {'lstm_hidden': 128, 'lstm_layers': 2, 'transformer_layers': 2, 'nhead': 4, 'dropout': 0.08, 'learning_rate': 0.00025, 'epochs': 80},
+    {'lstm_hidden': 96, 'lstm_layers': 2, 'transformer_layers': 2, 'nhead': 4, 'dropout': 0.08, 'learning_rate': 0.00035, 'epochs': 80},
+    {'lstm_hidden': 160, 'lstm_layers': 1, 'transformer_layers': 2, 'nhead': 8, 'dropout': 0.06, 'learning_rate': 0.00025, 'epochs': 90},
+    {'lstm_hidden': 192, 'lstm_layers': 1, 'transformer_layers': 2, 'nhead': 8, 'dropout': 0.06, 'learning_rate': 0.0002, 'epochs': 90},
+    {'lstm_hidden': 128, 'lstm_layers': 1, 'transformer_layers': 3, 'nhead': 4, 'dropout': 0.06, 'learning_rate': 0.00025, 'epochs': 90},
 ]
 
 
@@ -175,9 +178,11 @@ def build_hybrid(params):
     return HybridModel(
         input_size=1,
         lstm_hidden=params['lstm_hidden'],
+        lstm_layers=params.get('lstm_layers', 1),
         transformer_layers=params['transformer_layers'],
         nhead=params['nhead'],
-        dropout=params['dropout']
+        dropout=params['dropout'],
+        feedforward_multiplier=params.get('feedforward_multiplier', 4)
     )
 
 
@@ -204,12 +209,17 @@ def train_best_hybrid(X_train, y_train, X_valid, y_valid):
             'valid_samples': len(X_valid),
             'hyperparams': {
                 'lstm_hidden': params['lstm_hidden'],
+                'lstm_layers': params.get('lstm_layers', 1),
                 'transformer_layers': params['transformer_layers'],
                 'nhead': params['nhead'],
                 'dropout': params['dropout'],
                 'learning_rate': params['learning_rate']
             },
-            'architecture': f"LSTM隐藏层{params['lstm_hidden']}单元 + {params['transformer_layers']}层Transformer编码器,{params['nhead']}个注意力头"
+            'architecture': (
+                f"{params.get('lstm_layers', 1)}层LSTM隐藏层{params['lstm_hidden']}单元 + "
+                f"{params['transformer_layers']}层Transformer编码器,{params['nhead']}个注意力头 + "
+                "LSTM/Transformer/最近观测融合回归头"
+            )
         }
         if best is None or met['rmse'] < best['metrics']['rmse']:
             best = result
@@ -217,7 +227,26 @@ def train_best_hybrid(X_train, y_train, X_valid, y_valid):
     return best
 
 
-def update_database(configs_results):
+def require_hybrid_best(configs_results):
+    """确认混合模型真实优于其他模型，避免把不达标结果写成激活版本。"""
+    ranked = sorted(
+        ((name, result['metrics']['rmse']) for name, result in configs_results.items()),
+        key=lambda item: item[1]
+    )
+    print("\n🏁 RMSE排名:")
+    for idx, (name, rmse) in enumerate(ranked, start=1):
+        print(f"  {idx}. {name}: RMSE={rmse:.6f}")
+
+    if ranked[0][0] != 'Hybrid_v1':
+        hybrid_rmse = configs_results['Hybrid_v1']['metrics']['rmse']
+        best_name, best_rmse = ranked[0]
+        raise RuntimeError(
+            f"Hybrid_v1未达标: Hybrid RMSE={hybrid_rmse:.6f}, "
+            f"当前最优为{best_name} RMSE={best_rmse:.6f}"
+        )
+
+
+def update_database(configs_results, active_model='Hybrid_v1'):
     """更新数据库中的训练记录和模型版本"""
     print(f"\n{'='*60}")
     print(f"💾 更新数据库...")
@@ -258,7 +287,7 @@ def update_database(configs_results):
         db.session.flush()
 
         # 创建模型版本
-        is_active = 1 if cfg_name == 'Hybrid_v1' else 0
+        is_active = 1 if cfg_name == active_model else 0
         version = ModelVersion(
             trainid=record.trainid,
             versionnumber='v2.0.0',
@@ -317,8 +346,10 @@ def main():
         # 3. Hybrid (LSTM-Transformer)
         results['Hybrid_v1'] = train_best_hybrid(X_train, y_train, X_valid, y_valid)
 
+        require_hybrid_best(results)
+
         # 更新数据库
-        update_database(results)
+        update_database(results, active_model='Hybrid_v1')
 
         print(f"\n{'='*60}")
         print(f"🎉 全部训练完成！")
