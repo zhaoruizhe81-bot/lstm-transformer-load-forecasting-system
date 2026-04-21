@@ -1,0 +1,36 @@
+@startuml
+!include /Users/zhaoruizhe/.codex/skills/plantuml-paper-diagrams/assets/paper-theme.puml
+skinparam defaultFontName "PingFang SC"
+skinparam RectangleFontSize 16
+top to bottom direction
+
+rectangle "输入负荷序列\nX: B x 24 x 1" as Input
+rectangle "线性嵌入层\nLinear: 1 -> 64" as Embedding
+rectangle "位置编码\n引入时间步顺序信息" as PE
+
+package "Transformer Encoder x 2" {
+  rectangle "多头自注意力\n4 heads" as MHA
+  rectangle "残差连接\n层归一化" as Norm1
+  rectangle "前馈网络\n64 -> 256 -> 64" as FFN
+  rectangle "残差连接\n层归一化" as Norm2
+}
+
+rectangle "最后时间步特征\nz_24: B x 64" as LastFeature
+rectangle "全连接输出层\nLinear: 64 -> 1" as FC
+rectangle "单步负荷预测值\ny_hat: B x 1" as Output
+
+Input --> Embedding
+Embedding --> PE
+PE --> MHA
+MHA --> Norm1
+Norm1 --> FFN
+FFN --> Norm2
+Norm2 --> LastFeature : 取 t = 24
+LastFeature --> FC
+FC --> Output
+
+note bottom of MHA
+自注意力在全部时间步之间建立依赖，
+用于捕获负荷序列的全局变化关系。
+end note
+@enduml

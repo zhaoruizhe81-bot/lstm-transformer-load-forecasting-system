@@ -1,0 +1,34 @@
+@startuml
+!include /Users/zhaoruizhe/.codex/skills/plantuml-paper-diagrams/assets/paper-theme.puml
+skinparam defaultFontName "PingFang SC"
+skinparam RectangleFontSize 15
+skinparam ArrowFontSize 13
+top to bottom direction
+
+rectangle "开始训练任务" as Start
+database "数据库\n指定时间范围负荷值" as DB
+rectangle "数据准备\n查询训练集与验证集负荷值" as LoadData
+rectangle "Min-Max 归一化\n映射到 [0, 1]" as Normalize
+rectangle "滑动窗口构造样本\n窗口长度 = 24\nX: 前24小时, y: 下一时刻" as Window
+rectangle "批量数据加载器\nbatch_size = 32\n训练集随机打乱" as Loader
+
+package "统一训练框架" {
+  rectangle "选择模型\nLSTM / Transformer / LSTM-Transformer" as SelectModel
+  rectangle "Epoch 循环\n训练: model.train(), 前向传播, MSE损失, Adam更新\n验证: model.eval(), no_grad计算验证损失\n每10个epoch输出训练损失和验证损失" as EpochLoop
+}
+
+rectangle "保存模型权重\n.pth 文件" as SaveModel
+rectangle "计算验证指标\nMAE / RMSE / MAPE / R2" as Metrics
+rectangle "结束" as End
+
+Start --> DB
+DB --> LoadData
+LoadData --> Normalize
+Normalize --> Window
+Window --> Loader
+Loader --> SelectModel
+SelectModel --> EpochLoop
+EpochLoop --> SaveModel : 完成全部 epoch
+SaveModel --> Metrics
+Metrics --> End
+@enduml

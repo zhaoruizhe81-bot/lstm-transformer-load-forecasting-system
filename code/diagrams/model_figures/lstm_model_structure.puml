@@ -1,0 +1,30 @@
+@startuml
+!include /Users/zhaoruizhe/.codex/skills/plantuml-paper-diagrams/assets/paper-theme.puml
+skinparam defaultFontName "PingFang SC"
+skinparam RectangleFontSize 16
+top to bottom direction
+
+rectangle "输入负荷序列\nX: B x 24 x 1\n24小时单变量负荷" as Input
+
+package "两层堆叠 LSTM" {
+  rectangle "LSTM 层 1\ninput_size = 1\nhidden_size = 128" as L1
+  rectangle "Dropout\nrate = 0.2" as Drop1
+  rectangle "LSTM 层 2\nhidden_size = 128\n输出各时间步隐状态" as L2
+}
+
+rectangle "最后时间步隐状态\nh_24: B x 128" as LastState
+rectangle "全连接输出层\nLinear: 128 -> 1" as FC
+rectangle "单步负荷预测值\ny_hat: B x 1" as Output
+
+Input --> L1 : 时序输入
+L1 --> Drop1
+Drop1 --> L2
+L2 --> LastState : 取 t = 24
+LastState --> FC
+FC --> Output
+
+note bottom of L2
+LSTM 门控结构保留历史负荷变化信息，
+两层堆叠用于提取更高层时序特征。
+end note
+@enduml

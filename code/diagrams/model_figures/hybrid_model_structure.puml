@@ -1,0 +1,40 @@
+@startuml
+!include /Users/zhaoruizhe/.codex/skills/plantuml-paper-diagrams/assets/paper-theme.puml
+skinparam defaultFontName "PingFang SC"
+skinparam RectangleFontSize 16
+top to bottom direction
+
+rectangle "输入负荷序列\nX: B x 24 x 1" as Input
+
+package "第一阶段：局部时序特征提取" {
+  rectangle "单层 LSTM\ninput_size = 1\nhidden_size = 64" as LSTM
+  rectangle "隐状态序列\nH: B x 24 x 64" as HiddenSeq
+}
+
+package "第二阶段：全局依赖建模" {
+  rectangle "Transformer Encoder x 2\n4 heads" as Encoder
+  rectangle "自注意力聚合\n全序列时间依赖" as AttentionFeature
+}
+
+package "第三阶段：预测输出" {
+  rectangle "最后时间步特征\nz_24: B x 64" as LastFeature
+  rectangle "Dropout\nrate = 0.15" as Dropout
+  rectangle "全连接输出层\nLinear: 64 -> 1" as FC
+}
+
+rectangle "单步负荷预测值\ny_hat: B x 1" as Output
+
+Input --> LSTM
+LSTM --> HiddenSeq
+HiddenSeq --> Encoder
+Encoder --> AttentionFeature
+AttentionFeature --> LastFeature : 取 t = 24
+LastFeature --> Dropout
+Dropout --> FC
+FC --> Output
+
+note bottom of HiddenSeq
+LSTM 先编码相邻时间步的局部模式，
+Transformer 再建模长距离依赖。
+end note
+@enduml
